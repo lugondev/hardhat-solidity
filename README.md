@@ -57,6 +57,6 @@ Create/modify network config in `hardhat.config.ts` and add API key and private 
 
 Add Etherscan API key to `hardhat.config.ts`, then run:
 
-`npx hardhat verify-contract --contract-name Counter --address <DEPLOYED ADDRESS>`
+`npx hardhat verify --constructor-args arguments.js DEPLOYED_CONTRACT_ADDRESS`
 
 PRs and feedback welcome!
