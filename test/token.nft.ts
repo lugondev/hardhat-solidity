@@ -1,13 +1,14 @@
-import { ethers } from "hardhat";
-import chai, { assert } from "chai";
+import {ethers} from "hardhat";
+import chai, {assert} from "chai";
 import chaiAsPromised from "chai-as-promised";
-import { TokenNFT, TokenNFT__factory, NFTMarket, NFTMarket__factory } from "../typechain";
-import { SignerWithAddress } from "@nomiclabs/hardhat-ethers/signers";
-import { BigNumber } from "ethers";
+import {MillionDotToken, MillionDotToken__factory, NFTMarket, NFTMarket__factory, TokenNFT, TokenNFT__factory} from "../typechain";
+import {SignerWithAddress} from "@nomiclabs/hardhat-ethers/signers";
+import {BigNumber} from "ethers";
 
 chai.use(chaiAsPromised);
 
 describe("Million Dot Token NFT", () => {
+    let mdotToken: MillionDotToken;
     let mdotNFT: TokenNFT;
     let nftMarket: NFTMarket;
     let signers: SignerWithAddress[];
@@ -30,13 +31,26 @@ describe("Million Dot Token NFT", () => {
 
         nftMarket = await nftMarketFactory.deploy();
         await nftMarket.deployed();
+
+        const mdotTokenFactory = (await ethers.getContractFactory(
+            "MillionDotToken",
+            signers[0]
+        )) as MillionDotToken__factory;
+        mdotToken = await mdotTokenFactory.deploy(
+            "MillionDotToken",
+            "MDOT",
+            BigNumber.from(100000).mul(BigDecimals),
+            BigNumber.from(10000000).mul(BigDecimals),
+            signers[0].address
+        );
+        await mdotToken.deployed();
     });
 
     describe("information", async () => {
         it("should get name and symbol", async () => {
             let name = await mdotNFT.name();
             let symbol = await mdotNFT.symbol();
-            console.log({ name, symbol });
+            console.log({name, symbol});
         });
     });
 
@@ -46,18 +60,18 @@ describe("Million Dot Token NFT", () => {
         it("mint with square", async () => {
             await mdotNFT.mint(userWallet, 123)
             const isExistSquare123 = await mdotNFT.isExistSquare(123)
-            assert(isExistSquare123 == true)
+            assert.isTrue(isExistSquare123)
             const isExistSquare112 = await mdotNFT.isExistSquare(112)
-            assert(isExistSquare112 == false)
+            assert.isFalse(isExistSquare112)
         })
 
         it("update ad data", async () => {
             await mdotNFT.mint(signers[1].address, 123)
             await mdotNFT.connect(signers[1]).updateAd(1, "this is sample ad text", "https://google.com", "Qiuaehf9283248024804")
             const tokenInfo = await mdotNFT.getAdData(1)
-            console.log({ tokenInfo });
+            console.log({tokenInfo});
             const squareData = await mdotNFT.getSquareData(1)
-            console.log({ squareData });
+            console.log({squareData});
         })
     })
 
@@ -92,10 +106,12 @@ describe("Million Dot Token NFT", () => {
 
     describe("Create sale for NFT", () => {
         let totalSupply = 0
+
         async function mintNft(address: string, pos: number) {
             await mdotNFT.mint(address, pos)
             totalSupply++
         }
+
         async function transferNft(from: string, to: string, id: number) {
             await mdotNFT.transferFrom(from, to, id)
         }
@@ -114,7 +130,7 @@ describe("Million Dot Token NFT", () => {
             await Promise.all((new Array(11).fill(0)).map(async (_, index) => {
                 const tokenId = index + 1
                 const pos = await mdotNFT.getPositionSquareToken(tokenId)
-                console.log({ tokenId, position: pos.toNumber() });
+                console.log({tokenId, position: pos.toNumber()});
             }))
 
             const currentTotalSupply = await mdotNFT.totalSupply()
@@ -127,22 +143,30 @@ describe("Million Dot Token NFT", () => {
 
         it("should create sale on market", async () => {
             let currentTotalSupply = await mdotNFT.totalSupply()
+            await mdotNFT.updateMarketAddress(nftMarket.address)
+
             assert(currentTotalSupply.toNumber() == 0);
             await createData()
             currentTotalSupply = await mdotNFT.totalSupply()
             assert(currentTotalSupply.toNumber() == 11);
-            await mdotNFT.setApprovalForAll(nftMarket.address, true)
-            await nftMarket.addSupportNft(mdotNFT.address)
-            await nftMarket.addSeller(signers[0].address)
-            await nftMarket.createSales(2, 12, 14, 0, 60 * 60, mdotNFT.address)
-            let salesAmount = await nftMarket.totalSales()
-            console.log(salesAmount.toNumber());
-            await nftMarket.createSales(6, 12, 14, 0, 60 * 60, mdotNFT.address)
-            salesAmount = await nftMarket.totalSales()
-            console.log(salesAmount.toNumber());
-            await nftMarket.createSales(5, 12, 14, 0, 60 * 60, mdotNFT.address)
-            salesAmount = await nftMarket.totalSales()
-            console.log(salesAmount.toNumber());
+
+            await nftMarket.supportNft(mdotNFT.address, true)
+            await nftMarket.updateSeller(signers[0].address, true)
+            await nftMarket.supportPaymentToken(mdotToken.address, true)
+
+            const isApproved = await mdotNFT.isApprovedForAll(signers[0].address, nftMarket.address)
+            console.log({isApproved})
+            await nftMarket.testTransfer(mdotNFT.address, signers[0].address, signers[2].address, 2)
+            // await nftMarket.connect(signers[1]).testTransfer(mdotNFT.address, signers[0].address, signers[4].address, 2)
+            // await nftMarket.createSales(2, 12, 14, 0, 60 * 60, mdotNFT.address, mdotToken.address)
+            // let salesAmount = await nftMarket.totalSales()
+            // console.log(salesAmount.toNumber());
+            // await nftMarket.createSales(6, 12, 14, 0, 60 * 60, mdotNFT.address, mdotToken.address)
+            // salesAmount = await nftMarket.totalSales()
+            // console.log(salesAmount.toNumber());
+            // await nftMarket.createSales(11, 12, 14, 0, 60 * 60, mdotNFT.address, mdotToken.address)
+            // salesAmount = await nftMarket.totalSales()
+            // console.log(salesAmount.toNumber());
 
         })
     })

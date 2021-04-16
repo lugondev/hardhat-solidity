@@ -19,7 +19,13 @@ describe("Million Dot Token ERC20", () => {
             "MillionDotToken",
             signers[0]
         )) as MillionDotToken__factory;
-        mdotToken = await mdotFactory.deploy("MillionDotToken", "MDOT", BigNumber.from(10000000).mul(BigDecimals), signers[0].address);
+        mdotToken = await mdotFactory.deploy(
+            "MillionDotToken",
+            "MDOT",
+            BigNumber.from(100000).mul(BigDecimals),
+            BigNumber.from(10000000).mul(BigDecimals),
+            signers[0].address
+        );
         await mdotToken.deployed();
     });
 

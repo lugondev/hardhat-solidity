@@ -9,12 +9,6 @@ import "@openzeppelin/contracts/utils/Address.sol";
 import "@openzeppelin/contracts/utils/Strings.sol";
 import "./ERC721.sol";
 
-contract OwnableDelegateProxy {}
-
-contract ProxyRegistry {
-    mapping(address => OwnableDelegateProxy) public proxies;
-}
-
 pragma experimental ABIEncoderV2;
 
 contract SquareFactory is Ownable {
@@ -74,7 +68,7 @@ contract SquareFactory is Ownable {
 contract TokenNFT is ERC721, SquareFactory {
     using SafeMath for uint256;
 
-    address proxyRegistryAddress;
+    address market;
     event MintSquare(uint256 indexed tokenId, uint256 position);
 
     enum Rarity {TOP_NOTCH, LEGENDARY, EPIC, RARE, NORMAL_RARE, COMMON}
@@ -248,20 +242,15 @@ contract TokenNFT is ERC721, SquareFactory {
         override
         returns (bool)
     {
-        // Whitelist proxy contract for easy trading.
-        // ProxyRegistry proxyRegistry = ProxyRegistry(proxyRegistryAddress);
-        // if (address(proxyRegistry.proxies(owner)) == operator) {
-        //     return true;
-        // }
+        if (market == operator) {
+            return true;
+        }
 
         return super.isApprovedForAll(owner, operator);
     }
 
-    function updateProxyRegistryAddress(address _proxyRegistryAddress)
-        public
-        onlyOwner
-    {
-        proxyRegistryAddress = _proxyRegistryAddress;
+    function updateMarketAddress(address _market) public onlyOwner {
+        market = _market;
     }
 
     function isExistSquare(uint256 positionSquare)

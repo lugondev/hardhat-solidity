@@ -8,6 +8,7 @@
     "clean": "npx hardhat clean",
     "compile": "npx hardhat compile",
     "test": "npx hardhat test",
+    "deploy:rinkeby": "npx hardhat run --network rinkeby scripts/deploy.ts",
     "coverage": "npm run build && npx hardhat coverage --temp artifacts --network coverage"
   },
   "repository": {

@@ -4,23 +4,44 @@ pragma experimental ABIEncoderV2;
 
 import "@openzeppelin/contracts/math/Math.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/Context.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721Receiver.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
 import "./Governance.sol";
 
-contract NFTMarket is IERC721Receiver, Governance {
+interface MintDotTokenErc20 {
+    function mintable() external view returns (uint256);
+
+    function mint(address recipient, uint256 amount) external;
+}
+
+contract NFTMarket is IERC721Receiver, Governance, Context {
     using SafeERC20 for IERC20;
     using SafeMath for uint256;
 
-    IERC20 public _mdotToken = IERC20(0x0);
+    IERC20 public _mdotToken = IERC20(0);
 
     struct SalesObject {
         uint256 id;
         uint256 tokenId;
         address seller;
         IERC721 nft;
+        IERC20 paymentToken;
+        address buyer;
+        uint256 startTime;
+        uint256 durationTime;
+        uint256 price;
+        uint8 status;
+    }
+
+    struct AuctionsObject {
+        uint256 id;
+        uint256 tokenId;
+        address seller;
+        IERC721 nft;
+        IERC20 paymentToken;
         address buyer;
         uint256 startTime;
         uint256 durationTime;
@@ -33,19 +54,22 @@ contract NFTMarket is IERC721Receiver, Governance {
     uint256 private _salesAmount = 0;
 
     SalesObject[] _salesObjects;
+    AuctionsObject[] _auctionsObjects;
 
     uint256 public _minDurationTime = 5 minutes;
 
     mapping(address => bool) public _seller;
     mapping(address => bool) public _verifySeller;
     mapping(address => bool) public _supportNft;
+    mapping(address => mapping(uint256 => uint256)) public _indexTokenNft;
+    mapping(address => bool) public _supportTokenPayment;
     bool public _isStartUserSales;
 
-    bool public _isRewardSellerDandy = false;
-    bool public _isRewardBuyerDandy = false;
+    bool public _isRewardSeller = false;
+    bool public _isRewardBuyer = false;
 
-    uint256 public _sellerRewardDandy = 1e15;
-    uint256 public _buyerRewardDandy = 1e15;
+    uint256 public _sellerReward = 1e15;
+    uint256 public _buyerReward = 1e15;
 
     uint256 public _tipsFeeRate = 20;
     uint256 public _baseRate = 1000;
@@ -64,12 +88,23 @@ contract NFTMarket is IERC721Receiver, Governance {
         uint256 tokenId,
         address seller,
         address nft,
+        address paymentToken,
+        address buyer,
+        uint256 startTime,
+        uint256 price
+    );
+
+    event NewAuction(
+        uint256 indexed id,
+        uint256 tokenId,
+        address seller,
+        address nft,
+        address paymentToken,
         address buyer,
         uint256 startTime,
         uint256 durationTime,
         uint256 maxPrice,
-        uint256 minPrice,
-        uint256 finalPrice
+        uint256 minPrice
     );
 
     event CancelSales(uint256 indexed id, uint256 tokenId);
@@ -81,14 +116,18 @@ contract NFTMarket is IERC721Receiver, Governance {
         bytes data
     );
 
+    constructor() public {
+        _tipsFeeWallet = _msgSender();
+    }
+
     modifier validAddress(address addr) {
-        require(addr != address(0x0), "require not 0x");
+        require(addr != address(0), "require not 0x");
         _;
     }
 
     modifier validAddressNFT(address addr) {
-        require(addr != address(0x0), "require not 0x");
-        require(_supportNft[addr] == true, "not support address");
+        require(addr != address(0), "require not 0x");
+        require(_supportNft[addr], "not support address");
         _;
     }
 
@@ -100,17 +139,14 @@ contract NFTMarket is IERC721Receiver, Governance {
     modifier checkTime(uint256 index) {
         require(index <= _salesObjects.length, "overflow");
         SalesObject storage obj = _salesObjects[index];
-        require(obj.startTime <= now, "!open");
+        require(obj.startTime <= block.timestamp, "!open");
         _;
     }
 
     modifier mustNotSellingOut(uint256 index) {
         require(index <= _salesObjects.length, "overflow");
         SalesObject storage obj = _salesObjects[index];
-        require(
-            obj.buyer == address(0x0) && obj.status == 0,
-            "sry, selling out"
-        );
+        require(obj.buyer == address(0) && obj.status == 0, "selling out");
         _;
     }
 
@@ -118,7 +154,7 @@ contract NFTMarket is IERC721Receiver, Governance {
         require(index <= _salesObjects.length, "overflow");
         SalesObject storage obj = _salesObjects[index];
         require(
-            obj.seller == msg.sender || msg.sender == _governance,
+            obj.seller == _msgSender() || _msgSender() == _governance,
             "author & governance"
         );
         _;
@@ -129,85 +165,71 @@ contract NFTMarket is IERC721Receiver, Governance {
         asset.safeTransfer(_governance, balance);
     }
 
-    function setSellerRewardDandy(uint256 rewardDandy) public onlyGovernance {
-        _sellerRewardDandy = rewardDandy;
+    function setSellerReward(uint256 reward) public onlyGovernance {
+        _sellerReward = reward;
     }
 
-    function setBuyerRewardDandy(uint256 rewardDandy) public onlyGovernance {
-        _buyerRewardDandy = rewardDandy;
+    function setBuyerReward(uint256 reward) public onlyGovernance {
+        _sellerReward = reward;
     }
 
-    function addSupportNft(address nft)
+    function supportNft(address nft, bool status)
         public
         onlyGovernance
         validAddress(nft)
     {
-        _supportNft[nft] = true;
+        require(_supportNft[nft] != status);
+
+        _supportNft[nft] = status;
     }
 
-    function removeSupportNft(address nft)
+    function supportPaymentToken(address paymentToken, bool status)
         public
         onlyGovernance
-        validAddress(nft)
+        validAddress(paymentToken)
     {
-        _supportNft[nft] = false;
+        require(_supportTokenPayment[paymentToken] != status);
+
+        _supportTokenPayment[paymentToken] = status;
     }
 
-    function addSeller(address seller)
-        public
-        onlyGovernance
-        validAddress(seller)
-    {
-        _seller[seller] = true;
-    }
-
-    function removeSeller(address seller)
+    function updateSeller(address seller, bool status)
         public
         onlyGovernance
         validAddress(seller)
     {
-        _seller[seller] = false;
+        require(_seller[seller] != status);
+
+        _seller[seller] = status;
     }
 
-    function addVerifySeller(address seller)
+    function verifySeller(address seller, bool status)
         public
         onlyGovernance
         validAddress(seller)
     {
-        _verifySeller[seller] = true;
-    }
+        require(_verifySeller[seller] != status);
 
-    function removeVerifySeller(address seller)
-        public
-        onlyGovernance
-        validAddress(seller)
-    {
-        _verifySeller[seller] = false;
+        _verifySeller[seller] = status;
     }
 
     function setIsStartUserSales(bool isStartUserSales) public onlyGovernance {
         _isStartUserSales = isStartUserSales;
     }
 
-    function setIsRewardSellerDandy(bool isRewardSellerDandy)
-        public
-        onlyGovernance
-    {
-        _isRewardSellerDandy = isRewardSellerDandy;
+    function setIsRewardSeller(bool isRewardSeller) public onlyGovernance {
+        _isRewardSeller = isRewardSeller;
     }
 
-    function setIsRewardBuyerDandy(bool isRewardBuyerDandy)
-        public
-        onlyGovernance
-    {
-        _isRewardBuyerDandy = isRewardBuyerDandy;
+    function setIsRewardBuyer(bool isRewardBuyer) public onlyGovernance {
+        _isRewardBuyer = isRewardBuyer;
     }
 
     function setMinDurationTime(uint256 durationTime) public onlyGovernance {
         _minDurationTime = durationTime;
     }
 
-    function setTipsFeeWallet(address payable wallet) public onlyGovernance {
+    function setTipsFeeWallet(address wallet) public onlyGovernance {
         _tipsFeeWallet = wallet;
     }
 
@@ -230,26 +252,20 @@ contract NFTMarket is IERC721Receiver, Governance {
         return _salesObjects[index];
     }
 
-    function getSalesPrice(uint256 index)
-        external
-        view
-        checkIndexSale(index)
-        returns (uint256)
-    {
-        SalesObject storage obj = _salesObjects[index];
-        if (obj.buyer != address(0x0) || obj.status == 1) {
-            return obj.finalPrice;
-        } else {
-            if (obj.startTime.add(obj.durationTime) < now) {
-                return obj.minPrice;
-            } else if (obj.startTime >= now) {
-                return obj.maxPrice;
-            } else {
-                uint256 per =
-                    obj.maxPrice.sub(obj.minPrice).div(obj.durationTime);
-                return obj.maxPrice.sub(now.sub(obj.startTime).mul(per));
-            }
+    function getSalesPrice(uint256 index) public view returns (uint256) {
+        if (index > _salesObjects.length || index == 0) {
+            return 0;
         }
+        SalesObject storage obj = _salesObjects[index];
+        return obj.price;
+    }
+
+    function getPrice(address nft, uint256 tokenId)
+        public
+        view
+        returns (uint256 price)
+    {
+        price = getSalesPrice(_indexTokenNft[nft][tokenId]);
     }
 
     function setMdotTokenAddress(address addr)
@@ -291,120 +307,196 @@ contract NFTMarket is IERC721Receiver, Governance {
         emit CancelSales(index, obj.tokenId);
     }
 
-    function createSales(
+    function createSale(
         uint256 tokenId,
-        uint256 minPrice,
-        uint256 maxPrice,
+        uint256 price,
         uint256 startTime,
-        uint256 durationTime,
-        address nft
+        address nft,
+        address paymentToken
     ) external validAddressNFT(nft) returns (uint256) {
-        require(tokenId != 0, "invalid token");
-        startTime = startTime == 0 ? now + 5 minutes : startTime;
+        require(_supportTokenPayment[paymentToken], "Invalid payment token");
 
-        require(startTime.add(durationTime) > now, "invalid start time");
-        require(durationTime >= _minDurationTime, "invalid duration");
-        require(minPrice > 0, "Invalid min price");
-
-        maxPrice = maxPrice == 0 || maxPrice < minPrice ? minPrice : maxPrice;
-        require(maxPrice >= minPrice, "Invalid max price");
+        require(tokenId != 0, "Invalid NFT item");
+        startTime = startTime == 0 ? block.timestamp.add(5 minutes) : startTime;
 
         require(
-            _isStartUserSales || _seller[msg.sender] == true,
+            _isStartUserSales || _seller[_msgSender()] == true,
             "cannot sales"
         );
 
-        IERC721(nft).safeTransferFrom(msg.sender, address(this), tokenId);
+        IERC721(nft).safeTransferFrom(_msgSender(), address(this), tokenId);
 
         _salesAmount++;
         SalesObject memory obj;
 
         obj.id = _salesAmount;
         obj.tokenId = tokenId;
-        obj.seller = msg.sender;
+        obj.seller = _msgSender();
         obj.nft = IERC721(nft);
-        obj.buyer = address(0x0);
+        obj.paymentToken = IERC20(paymentToken);
+        obj.buyer = address(0);
         obj.startTime = startTime;
-        obj.durationTime = durationTime;
-        obj.maxPrice = maxPrice;
-        obj.minPrice = minPrice;
-        obj.finalPrice = 0;
+        obj.price = price;
         obj.status = 0;
 
         if (_salesObjects.length == 0) {
             SalesObject memory zeroObj;
             zeroObj.tokenId = 0;
-            zeroObj.seller = address(0x0);
+            zeroObj.seller = address(0);
             zeroObj.nft = IERC721(0x0);
-            zeroObj.buyer = address(0x0);
+            zeroObj.paymentToken = IERC20(0x0);
+            zeroObj.buyer = address(0);
             zeroObj.startTime = 0;
-            zeroObj.durationTime = 0;
-            zeroObj.maxPrice = 0;
-            zeroObj.minPrice = 0;
-            zeroObj.finalPrice = 0;
+            zeroObj.price = 0;
             zeroObj.status = 2;
             _salesObjects.push(zeroObj);
         }
 
         _salesObjects.push(obj);
 
-        // if (_isRewardSellerDandy || _verifySeller[msg.sender]) {
-        //     _dandy.mint(msg.sender, _sellerRewardDandy);
-        // }
+        if (_isRewardSeller || _verifySeller[_msgSender()]) {
+            MintDotTokenErc20 mintDot = MintDotTokenErc20(address(_mdotToken));
+            if (mintDot.mintable() >= _sellerReward)
+                mintDot.mint(_msgSender(), _sellerReward);
+        }
 
-        // emit NewSales(
-        //     obj.id,
-        //     tokenId,
-        //     msg.sender,
-        //     nft,
-        //     address(0x0),
-        //     startTime,
-        //     durationTime,
-        //     maxPrice,
-        //     minPrice,
-        //     0
-        // );
+        emit NewSales(
+            obj.id,
+            tokenId,
+            _msgSender(),
+            nft,
+            paymentToken,
+            address(0),
+            startTime,
+            obj.price
+        );
+
+        _indexTokenNft[address(nft)][tokenId] = _salesAmount;
+
         return _salesAmount;
     }
 
+    // function createAuction(
+    //     uint256 tokenId,
+    //     uint256 minPrice,
+    //     uint256 maxPrice,
+    //     uint256 startTime,
+    //     uint256 durationTime,
+    //     address nft,
+    //     address paymentToken
+    // ) external validAddressNFT(nft) returns (uint256) {
+    //     require(_supportTokenPayment[paymentToken], "Invalid payment token");
+
+    //     require(tokenId != 0, "Invalid NFT item");
+    //     startTime = startTime == 0 ? block.timestamp.add(5 minutes) : startTime;
+
+    //     require(
+    //         startTime.add(durationTime) > block.timestamp,
+    //         "invalid start time"
+    //     );
+
+    //     require(durationTime >= _minDurationTime, "invalid duration");
+    //     require(minPrice > 0, "Invalid min price");
+
+    //     if (maxPrice == 0 || maxPrice < minPrice) {
+    //         maxPrice = minPrice;
+    //     }
+
+    //     require(
+    //         _isStartUserSales || _seller[_msgSender()] == true,
+    //         "cannot sales"
+    //     );
+
+    //     IERC721(nft).safeTransferFrom(_msgSender(), address(this), tokenId);
+
+    //     _salesAmount++;
+    //     SalesObject memory obj;
+
+    //     obj.id = _salesAmount;
+    //     obj.tokenId = tokenId;
+    //     obj.seller = _msgSender();
+    //     obj.nft = IERC721(nft);
+    //     obj.paymentToken = IERC20(paymentToken);
+    //     obj.buyer = address(0);
+    //     obj.startTime = startTime;
+    //     obj.durationTime = durationTime;
+    //     obj.maxPrice = maxPrice;
+    //     obj.minPrice = minPrice;
+    //     obj.finalPrice = 0;
+    //     obj.status = 0;
+
+    //     if (_salesObjects.length == 0) {
+    //         SalesObject memory zeroObj;
+    //         zeroObj.tokenId = 0;
+    //         zeroObj.seller = address(0);
+    //         zeroObj.nft = IERC721(0x0);
+    //         zeroObj.paymentToken = IERC20(0x0);
+    //         zeroObj.buyer = address(0);
+    //         zeroObj.startTime = 0;
+    //         zeroObj.durationTime = 0;
+    //         zeroObj.maxPrice = 0;
+    //         zeroObj.minPrice = 0;
+    //         zeroObj.finalPrice = 0;
+    //         zeroObj.status = 2;
+    //         _salesObjects.push(zeroObj);
+    //     }
+
+    //     _salesObjects.push(obj);
+
+    //     if (_isRewardSeller || _verifySeller[_msgSender()]) {
+    //         MintDotTokenErc20 mintDot = MintDotTokenErc20(address(_mdotToken));
+    //         if (mintDot.mintable() >= _sellerReward)
+    //             mintDot.mint(_msgSender(), _sellerReward);
+    //     }
+
+    //     emit NewSales(
+    //         obj.id,
+    //         tokenId,
+    //         _msgSender(),
+    //         nft,
+    //         paymentToken,
+    //         address(0),
+    //         startTime,
+    //         durationTime,
+    //         obj.maxPrice,
+    //         obj.minPrice
+    //     );
+
+    //     _indexTokenNft[address(nft)][tokenId] = _salesAmount;
+
+    //     return _salesAmount;
+    // }
+
     function buy(uint256 index)
         public
-        payable
         mustNotSellingOut(index)
         checkTime(index)
     {
         SalesObject storage obj = _salesObjects[index];
-        require(
-            msg.value >= this.getSalesPrice(index),
-            "umm.....  your price is too low"
-        );
+        IERC20 paymentToken = IERC20(obj.paymentToken);
         uint256 price = this.getSalesPrice(index);
-        uint256 returnBack = msg.value.sub(price);
-        if (returnBack > 0) {
-            msg.sender.transfer(returnBack);
-        }
 
         uint256 tipsFee = price.mul(_tipsFeeRate).div(_baseRate);
         uint256 purchase = price.sub(tipsFee);
 
-        // if (_isRewardBuyerDandy || _verifySeller[obj.seller]) {
-        //     _dandy.mint(msg.sender, _buyerRewardDandy);
-        // }
+        paymentToken.transferFrom(_msgSender(), obj.seller, purchase);
 
-        // if (tipsFee > 0) {
-        //     _tipsFeeWallet.transfer(tipsFee);
-        // }
+        if (_isRewardBuyer || _verifySeller[obj.seller]) {
+            MintDotTokenErc20 mintDot = MintDotTokenErc20(address(_mdotToken));
+            if (mintDot.mintable() >= _buyerReward)
+                mintDot.mint(_msgSender(), _buyerReward);
+        }
 
-        // obj.seller.transfer(purchase);
-        obj.nft.safeTransferFrom(address(this), msg.sender, obj.tokenId);
+        if (tipsFee > 0) {
+            paymentToken.transferFrom(_msgSender(), obj.seller, purchase);
+        }
 
-        obj.buyer = msg.sender;
-        obj.finalPrice = price;
-
+        obj.nft.safeTransferFrom(address(this), _msgSender(), obj.tokenId);
+        obj.buyer = _msgSender();
         obj.status = 1;
 
         // fire event
-        emit Sales(index, obj.tokenId, msg.sender, price, tipsFee);
+        emit Sales(index, obj.tokenId, _msgSender(), price, tipsFee);
     }
 
     function totalSales() public view returns (uint256) {
