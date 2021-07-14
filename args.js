@@ -1,6 +1,3 @@
 module.exports = [
-    "TokenName", "TKS",
-    "10000000000000000000000",
-    "1000000000000000000000000",
-    "0x90Dc10E28f4c079d9B6537e10Cb2dee22f721CbB"
+    "0xd1e7abd4d1a365fde28a0679da43275d2bc1084f"
 ]

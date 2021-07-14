@@ -2,14 +2,11 @@ import { BigNumber } from "@ethersproject/bignumber";
 import { ethers } from "hardhat";
 
 async function main() {
-  const factory = await ethers.getContractFactory("MillionDotToken");
+  const factory = await ethers.getContractFactory("ZooGame");
 
   // If we had constructor arguments, they would be passed into deploy()
   let contract = await factory.deploy(
-    "TokenName", "TKS",
-    BigNumber.from(10000).mul(BigNumber.from(10).pow(18)),
-    BigNumber.from(1000000).mul(BigNumber.from(10).pow(18)),
-    "0x90Dc10E28f4c079d9B6537e10Cb2dee22f721CbB"
+    "0xd1e7abd4d1a365fde28a0679da43275d2bc1084f"
   );
 
   // The address the Contract WILL have once mined
